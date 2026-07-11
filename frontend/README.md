@@ -1,59 +1,43 @@
-# Zoom Clone - Frontend
+# Zoom Clone Frontend
 
-This is the Zoom-inspired Next.js frontend built with pure JavaScript, Tailwind CSS, and Lucide React.
+The Next.js 15 frontend provides the dashboard, meeting join flow, responsive room UI, local media controls, WebSocket room synchronization, and browser WebRTC peer connections.
 
-## Directory Structure
+## What it does
 
-```
+- Creates, schedules, lists, joins, and ends meetings through the FastAPI API.
+- Displays upcoming and recent meetings, public meeting IDs, and invite links.
+- Opens one meeting WebSocket using `NEXT_PUBLIC_API_URL`; HTTPS APIs are converted to WSS automatically.
+- Replaces the roster from authoritative `room_state` messages and uses a five-second REST fallback only when the socket is unavailable.
+- Uses targeted WebRTC offer, answer, and ICE signaling over that same socket.
+- Captures local microphone/camera tracks and renders received remote `MediaStream` objects in the corresponding participant tiles.
+- Keeps microphone/video controls synchronized with MediaStream tracks and participant state.
+
+## Structure
+
+```text
 frontend/
-├── src/
-│   ├── app/
-│   │   ├── globals.css
-│   │   ├── layout.js
-│   │   └── page.js
-│   │
-│   ├── components/
-│   │   ├── layout/
-│   │   │   ├── Sidebar.js
-│   │   │   └── Navbar.js
-│   │   │
-│   │   ├── dashboard/
-│   │   │   ├── ActionButtons.js
-│   │   │   ├── MeetingCard.js
-│   │   │   ├── UpcomingMeetings.js
-│   │   │   └── RecentMeetings.js
-│   │   │
-│   │   ├── modals/
-│   │   │   ├── JoinMeetingModal.js
-│   │   │   └── ScheduleMeetingModal.js
-│   │   │
-│   │   └── ui/
-│   │       ├── LoadingSpinner.js
-│   │       ├── EmptyState.js
-│   │       └── Toast.js
-│   │
-│   ├── services/
-│   │   └── api.js
-│   │
-│   └── utils/
-│       ├── dateUtils.js
-│       └── meetingUtils.js
-│
-├── public/
+├── src/app/meeting/[meetingId]/  # Meeting route and join flow
+├── src/components/meeting/       # Room, tiles, toolbar, roster, invite UI
+├── src/components/dashboard/     # Dashboard meeting views
+├── src/services/api.js           # REST client and WebSocket URL helper
 ├── .env.local.example
-├── package.json
-└── README.md
+└── package.json
 ```
 
-## Running the Application
+## Local development
 
-1. Make sure the backend is running at `http://localhost:8000`.
-2. Copy `.env.local.example` to `.env.local`.
-3. Install dependencies:
-   ```bash
-   npm install
-   ```
-4. Start the Next.js development server:
-   ```bash
-   npm run dev
-   ```
+```bash
+cp .env.local.example .env.local
+npm install
+npm run dev
+```
+
+Set `NEXT_PUBLIC_API_URL=http://localhost:8000/api` for local development. The backend must be running and camera/microphone permission must be granted to test calls.
+
+## Deployment
+
+The frontend is deployed on Vercel. Set `NEXT_PUBLIC_API_URL` to the public Render backend API URL including `/api`. The repository does not commit a public Vercel deployment URL or credentials.
+
+## Constraints
+
+The app intentionally has no authentication. WebRTC is a peer-to-peer MVP using STUN; production deployments need TURN and a scalable signaling/room-presence layer.
