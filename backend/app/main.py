@@ -7,6 +7,7 @@ from app.seed import seed_database
 from app.api.users import router as users_router
 from app.api.meetings import router as meetings_router
 from app.api.participants import router as participants_router
+from app.api.websockets import router as websockets_router
 
 # Initialize the SQLAlchemy Database Tables on startup
 print("[App] Initializing database tables...")
@@ -57,6 +58,7 @@ api_router.include_router(participants_router)
 
 # Mount global API router on the main app
 app.include_router(api_router)
+app.include_router(websockets_router)
 
 if __name__ == "__main__":
     import uvicorn

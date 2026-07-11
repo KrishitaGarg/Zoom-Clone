@@ -7,12 +7,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.meeting import Meeting
-from app.models.participant import MeetingParticipant
+from app.models.participant import MeetingParticipant, ParticipantSession
 from app.schemas.meeting import (
     MeetingResponse, MeetingCreateInstant, MeetingCreateScheduled
 )
 from app.schemas.participant import ParticipantResponse, ParticipantJoinRequest
 from app.services.meeting_service import MeetingService
+from app.realtime.connection_manager import connection_manager
 
 router = APIRouter(
     prefix="/meetings",
@@ -110,7 +111,7 @@ def get_meeting(meeting_id: str, db: Session = Depends(get_db)):
     return format_meeting_response(meeting)
 
 @router.post("/{meeting_id}/join", response_model=ParticipantResponse)
-def join_meeting(
+async def join_meeting(
     meeting_id: str,
     payload: ParticipantJoinRequest,
     db: Session = Depends(get_db)
@@ -132,6 +133,7 @@ def join_meeting(
         public_id=meeting_id,
         display_name=display_name
     )
+    await connection_manager.broadcast_room_state(meeting_id)
     return participant
 
 @router.get("/{meeting_id}/participants", response_model=List[ParticipantResponse])
@@ -140,16 +142,20 @@ def get_meeting_participants(meeting_id: str, db: Session = Depends(get_db)):
     Lists active, unremoved participants in the meeting room.
     """
     meeting = MeetingService.get_meeting_by_public_id(db, meeting_id)
-    participants = db.query(MeetingParticipant).filter(
+    participants = db.query(MeetingParticipant).join(
+        ParticipantSession, ParticipantSession.participant_id == MeetingParticipant.id
+    ).filter(
         MeetingParticipant.meeting_id == meeting.id,
-        MeetingParticipant.removed_at.is_(None)
-    ).all()
+        MeetingParticipant.removed_at.is_(None),
+        ParticipantSession.left_at.is_(None)
+    ).distinct().all()
     return participants
 
 @router.patch("/{meeting_id}/end", response_model=MeetingResponse)
-def end_meeting(meeting_id: str, db: Session = Depends(get_db)):
+async def end_meeting(meeting_id: str, db: Session = Depends(get_db)):
     """
     Ends an active meeting session, disconnecting active participants.
     """
     meeting = MeetingService.end_meeting(db, meeting_id)
+    await connection_manager.broadcast_room_state(meeting_id)
     return format_meeting_response(meeting)

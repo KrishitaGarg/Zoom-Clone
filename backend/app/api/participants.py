@@ -4,6 +4,14 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.schemas.participant import ParticipantResponse, ParticipantUpdateState
 from app.services.meeting_service import MeetingService
+from app.models.meeting import Meeting
+from app.realtime.connection_manager import connection_manager
+
+
+async def broadcast_participant_room(db: Session, participant) -> None:
+    meeting = db.query(Meeting).filter(Meeting.id == participant.meeting_id).first()
+    if meeting:
+        await connection_manager.broadcast_room_state(meeting.public_meeting_id)
 
 router = APIRouter(
     prefix="/participants",
@@ -11,7 +19,7 @@ router = APIRouter(
 )
 
 @router.patch("/{participant_id}", response_model=ParticipantResponse)
-def update_participant_state(
+async def update_participant_state(
     participant_id: int,
     payload: ParticipantUpdateState,
     db: Session = Depends(get_db)
@@ -26,10 +34,11 @@ def update_participant_state(
         is_muted=payload.is_muted,
         is_camera_on=payload.is_camera_on
     )
+    await broadcast_participant_room(db, participant)
     return participant
 
 @router.patch("/{participant_id}/leave", response_model=ParticipantResponse)
-def leave_meeting(
+async def leave_meeting(
     participant_id: int,
     db: Session = Depends(get_db)
 ):
@@ -40,10 +49,11 @@ def leave_meeting(
         db=db,
         participant_id=participant_id
     )
+    await broadcast_participant_room(db, participant)
     return participant
 
 @router.delete("/{participant_id}", response_model=ParticipantResponse)
-def remove_participant(
+async def remove_participant(
     participant_id: int,
     db: Session = Depends(get_db)
 ):
@@ -54,4 +64,5 @@ def remove_participant(
         db=db,
         participant_id=participant_id
     )
+    await broadcast_participant_room(db, participant)
     return participant

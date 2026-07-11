@@ -310,7 +310,7 @@ npm run dev
 The application demonstrates local browser camera and microphone access through the native `MediaDevices` API. It does not transmit media between separate browsers. Production multi-user video conferencing would require WebRTC peer-to-peer connections, signaling infrastructure, and STUN/TURN traversal servers.
 
 ### Participant Synchronization Limitation
-Participant data is refreshed using lightweight, efficient polling (every 5 seconds) only while the participants panel is open. WebSockets are intentionally excluded to keep the implementation focused and lightweight.
+Meeting rooms use FastAPI native WebSockets at `/ws/meetings/{meeting_id}` for authoritative room-state snapshots. Each REST mutation commits first, then broadcasts the latest meeting status and active participant list to every connected browser. The client reconnects after a short delay and falls back to five-second participant polling only while the WebSocket cannot connect. This in-memory connection manager is intended for the single-process MVP; a multi-worker production deployment requires a shared broker such as Redis Pub/Sub.
 
 ### Host Control Limitation
 The host's "Mute All" button updates the server-side participant states for demonstration. Without active WebRTC track signaling, it does not remotely disable another participant's physical browser recording device.
@@ -323,4 +323,4 @@ Authentication is outside the assignment scope. Production host controls require
 ## 10. Future Scope
 - **WebRTC Signalling**: Peer-to-peer visual integration is currently simulated. Adding a lightweight STUN/TURN server and signaling router would allow multi-peer video streaming.
 - **Authentication**: Adding a complete auth module with password hashing and JWT/OAuth tokens would allow multiple host accounts.
-- **Persistent Chat**: Implementing standard WebSockets would enable real-time meeting room text chat and whiteboard features.
+- **Persistent Chat**: The existing room-state WebSocket could be extended with chat and whiteboard events.

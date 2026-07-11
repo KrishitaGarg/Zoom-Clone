@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { updateParticipant, leaveMeeting, removeParticipant, endMeeting, getMeetingParticipants, getMeeting } from "../../services/api";
+import { updateParticipant, leaveMeeting, removeParticipant, endMeeting, getMeetingParticipants, getMeetingWebSocketUrl } from "../../services/api";
 
 import MeetingHeader from "./MeetingHeader";
 import PermissionNotice from "./PermissionNotice";
@@ -27,14 +27,17 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
 
   // Active connected participants list
   const [participants, setParticipants] = useState(initialParticipants || []);
+  const [meetingStatus, setMeetingStatus] = useState(meeting.status);
   
   // Drawer & Modal layout flags
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
 
-  // Hardware toggle states
-  const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOn, setIsCameraOn] = useState(true);
+  // The sole local media state. The toolbar, local tile, and MediaStream all use it.
+  const [localMediaState, setLocalMediaState] = useState({
+    isMuted: false,
+    isVideoOff: false,
+  });
 
   // Browser Permission notice state
   const [permissionError, setPermissionError] = useState("");
@@ -49,6 +52,12 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   // Refs for tracking HTML5 media streams
   const mediaStreamRef = useRef(null);
   const localVideoRef = useRef(null);
+  const socketRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const fallbackPollRef = useRef(null);
+  const shouldReconnectRef = useRef(true);
+  const hasConnectedRef = useRef(false);
+  const redirectingRef = useRef(false);
 
   // Helper to show custom micro toast notifications
   const showToast = useCallback((message, type = "success") => {
@@ -59,8 +68,27 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     setToast((prev) => ({ ...prev, show: false }));
   }, []);
 
-  // Determine current active participant record from the roster
-  const currentParticipant = participants.find((p) => p.id === Number(participantId));
+  const isMuted = localMediaState.isMuted;
+  const isVideoOff = localMediaState.isVideoOff;
+  const isCameraOn = !isVideoOff;
+
+  // Apply a state change to React and the real local browser tracks together.
+  const applyLocalMediaState = useCallback((nextState) => {
+    const audioTrack = mediaStreamRef.current?.getAudioTracks()[0];
+    const videoTrack = mediaStreamRef.current?.getVideoTracks()[0];
+    if (audioTrack) audioTrack.enabled = !nextState.isMuted;
+    if (videoTrack) videoTrack.enabled = !nextState.isVideoOff;
+    setLocalMediaState(nextState);
+  }, []);
+
+  // The local entry is always projected from localMediaState, rather than waiting
+  // for the round trip room-state broadcast before the tile updates.
+  const roomParticipants = participants.map((participant) => (
+    participant.id === Number(participantId)
+      ? { ...participant, is_muted: isMuted, is_camera_on: !isVideoOff }
+      : participant
+  ));
+  const currentParticipant = roomParticipants.find((p) => p.id === Number(participantId));
   const isHost = currentParticipant?.role === "host";
 
   // Helper function to update the backend participant record with latest camera/mic states
@@ -77,60 +105,115 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     }
   };
 
-  // Synchronize participants roster with FastAPI backend
-  const fetchParticipants = useCallback(async () => {
-    try {
-      // 1. Fetch live participant records
-      const updatedList = await getMeetingParticipants(meeting.public_meeting_id);
-      setParticipants(updatedList);
-      
-      // 2. Validate active presence. If we are no longer in the list (and we have joined), the host removed us!
-      const stillActive = updatedList.some((p) => p.id === Number(participantId));
-      if (!stillActive && participantId) {
-        cleanupMediaTracks();
-        router.push("/?removed=true");
-        return;
-      }
-
-      // 3. Optional: double check if the meeting status changed to ended
-      const updatedMeeting = await getMeeting(meeting.public_meeting_id);
-      if (updatedMeeting.status === "ended") {
-        cleanupMediaTracks();
-        router.push("/?meetingEnded=true");
-      }
-    } catch (err) {
-      console.error("Error polling participants roster:", err);
-    }
-  }, [meeting.public_meeting_id, participantId, router]);
-
   // Clean helper to stop all current media device tracks
   const cleanupMediaTracks = () => {
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
     }
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
   };
 
-  // Roster Polling: Triggered every 5 seconds only when participants sidebar is open
-  useEffect(() => {
-    let intervalId = null;
-    if (isParticipantsOpen) {
-      // Initial refresh upon drawer opening
-      fetchParticipants();
-      
-      intervalId = setInterval(() => {
-        fetchParticipants();
-      }, 5000);
-    }
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
+  const exitRoom = useCallback((reason) => {
+    if (redirectingRef.current) return;
+    redirectingRef.current = true;
+    shouldReconnectRef.current = false;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    if (fallbackPollRef.current) clearInterval(fallbackPollRef.current);
+    socketRef.current?.close();
+    cleanupMediaTracks();
+    showToast(reason === "ended" ? "This meeting has been ended by the host." : "You have been removed from this meeting.", "info");
+    setTimeout(() => router.push(reason === "ended" ? "/?meetingEnded=true" : "/?removed=true"), 1200);
+  }, [router, showToast]);
+
+  // REST is used for initial/reconnection reads and WebSocket fallback only.
+  const fetchParticipants = useCallback(async () => {
+    try {
+      const updatedList = await getMeetingParticipants(meeting.public_meeting_id);
+      setParticipants(updatedList);
+      const localParticipant = updatedList.find((p) => p.id === Number(participantId));
+      if (localParticipant) {
+        applyLocalMediaState({
+          isMuted: localParticipant.is_muted,
+          isVideoOff: !localParticipant.is_camera_on,
+        });
       }
+      const stillActive = updatedList.some((p) => p.id === Number(participantId));
+      if (!stillActive && participantId) {
+        exitRoom("removed");
+      }
+    } catch (err) {
+      console.error("Error fetching participants roster:", err);
+    }
+  }, [meeting.public_meeting_id, participantId, exitRoom, applyLocalMediaState]);
+
+  // One socket per room. A failed connection uses a five-second REST fallback.
+  useEffect(() => {
+    let disposed = false;
+    let initialConnectTimer = null;
+    const stopFallback = () => {
+      if (fallbackPollRef.current) clearInterval(fallbackPollRef.current);
+      fallbackPollRef.current = null;
     };
-  }, [isParticipantsOpen, fetchParticipants]);
+    const startFallback = () => {
+      if (disposed || fallbackPollRef.current) return;
+      fetchParticipants();
+      fallbackPollRef.current = setInterval(fetchParticipants, 5000);
+    };
+    const connect = () => {
+      if (disposed || !shouldReconnectRef.current) return;
+      const url = getMeetingWebSocketUrl(meeting.public_meeting_id);
+      if (!url) return startFallback();
+      let socket;
+      try { socket = new WebSocket(url); } catch (error) { startFallback(); return; }
+      socketRef.current = socket;
+      socket.onopen = () => {
+        if (disposed || socketRef.current !== socket) return;
+        const reconnected = hasConnectedRef.current;
+        hasConnectedRef.current = true;
+        stopFallback();
+        if (reconnected) fetchParticipants();
+      };
+      socket.onmessage = (event) => {
+        if (socketRef.current !== socket) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type !== "room_state") return;
+          setParticipants(Array.isArray(payload.participants) ? payload.participants : []);
+          const localParticipant = payload.participants?.find((p) => p.id === Number(participantId));
+          if (localParticipant) {
+            applyLocalMediaState({
+              isMuted: localParticipant.is_muted,
+              isVideoOff: !localParticipant.is_camera_on,
+            });
+          }
+          setMeetingStatus(payload.meeting?.status || meeting.status);
+          if (payload.meeting?.status === "ended") return exitRoom("ended");
+          if (participantId && !payload.participants?.some((p) => p.id === Number(participantId))) exitRoom("removed");
+        } catch (error) { console.error("Invalid room-state WebSocket message:", error); }
+      };
+      socket.onclose = () => {
+        if (disposed || socketRef.current !== socket) return;
+        startFallback();
+        if (shouldReconnectRef.current) reconnectTimerRef.current = setTimeout(connect, 1500);
+      };
+      socket.onerror = () => socket.close();
+    };
+    shouldReconnectRef.current = true;
+    fetchParticipants();
+    // Deferring one tick lets React Strict Mode clean up its probe effect before
+    // a physical connection is opened, preventing duplicate dev connections.
+    initialConnectTimer = setTimeout(connect, 0);
+    return () => {
+      disposed = true;
+      if (initialConnectTimer) clearTimeout(initialConnectTimer);
+      shouldReconnectRef.current = false;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      stopFallback();
+      socketRef.current?.close();
+      socketRef.current = null;
+    };
+  }, [meeting.public_meeting_id, participantId, fetchParticipants, exitRoom, meeting.status, applyLocalMediaState]);
 
   // Hardware Initialization: Run on component mount to capture user media
   useEffect(() => {
@@ -141,8 +224,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         // Secure browser context validation
         if (typeof navigator === "undefined" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           setPermissionError("InsecureContext");
-          setIsMuted(true);
-          setIsCameraOn(false);
+          applyLocalMediaState({ isMuted: true, isVideoOff: true });
           await updateParticipantStateInDb(true, false);
           return;
         }
@@ -163,8 +245,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         const initialMute = audioTrack ? !audioTrack.enabled : true;
         const initialCamera = videoTrack ? videoTrack.enabled : false;
 
-        setIsMuted(initialMute);
-        setIsCameraOn(initialCamera);
+        applyLocalMediaState({ isMuted: initialMute, isVideoOff: !initialCamera });
 
         // Bind stream source to standard HTML5 video element
         if (localVideoRef.current) {
@@ -174,9 +255,6 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         // Propagate current hardware states to the backend DB
         await updateParticipantStateInDb(initialMute, initialCamera);
         
-        // Load latest participants list
-        await fetchParticipants();
-
       } catch (err) {
         console.error("Camera/Microphone track error:", err);
         const name = err.name || "";
@@ -190,10 +268,8 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
           setPermissionError("NotFoundError");
         }
         
-        setIsMuted(true);
-        setIsCameraOn(false);
+        applyLocalMediaState({ isMuted: true, isVideoOff: true });
         await updateParticipantStateInDb(true, false);
-        await fetchParticipants();
       }
     };
 
@@ -206,7 +282,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
       }
       cleanupMediaTracks();
     };
-  }, []);
+  }, [applyLocalMediaState]);
 
   // Re-bind MediaStream source if video element mounts due to camera state changes
   useEffect(() => {
@@ -224,14 +300,8 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     const audioTrack = mediaStreamRef.current.getAudioTracks()[0];
     if (audioTrack) {
       const nextMuted = !isMuted;
-      audioTrack.enabled = !nextMuted;
-      setIsMuted(nextMuted);
+      applyLocalMediaState({ isMuted: nextMuted, isVideoOff });
       
-      // Update local participants list for snappy feedback
-      setParticipants((prev) => 
-        prev.map((p) => p.id === Number(participantId) ? { ...p, is_muted: nextMuted } : p)
-      );
-
       try {
         await updateParticipant(Number(participantId), { is_muted: nextMuted });
       } catch (err) {
@@ -251,17 +321,11 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     }
     const videoTrack = mediaStreamRef.current.getVideoTracks()[0];
     if (videoTrack) {
-      const nextCameraOn = !isCameraOn;
-      videoTrack.enabled = nextCameraOn;
-      setIsCameraOn(nextCameraOn);
+      const nextVideoOff = !isVideoOff;
+      applyLocalMediaState({ isMuted, isVideoOff: nextVideoOff });
       
-      // Update local participants list for snappy feedback
-      setParticipants((prev) => 
-        prev.map((p) => p.id === Number(participantId) ? { ...p, is_camera_on: nextCameraOn } : p)
-      );
-
       try {
-        await updateParticipant(Number(participantId), { is_camera_on: nextCameraOn });
+        await updateParticipant(Number(participantId), { is_camera_on: !nextVideoOff });
       } catch (err) {
         console.error("Failed to sync camera state:", err);
         showToast("Video toggled, but failed to sync state with participants.", "info");
@@ -275,7 +339,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   const handleMuteAllGuests = async () => {
     setIsMuteAllLoading(true);
     try {
-      const targetGuests = participants.filter(
+      const targetGuests = roomParticipants.filter(
         (p) => p.role !== "host" && p.id !== Number(participantId) && !p.is_muted
       );
 
@@ -285,7 +349,6 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
       );
 
       showToast("Requested Mute All for guest participants.", "success");
-      await fetchParticipants();
     } catch (err) {
       console.error("Failed to perform Mute All:", err);
       showToast("Failed to complete mute all request.", "error");
@@ -299,7 +362,6 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     try {
       await removeParticipant(evictedPid);
       showToast("Participant evicted from meeting room.", "success");
-      await fetchParticipants();
     } catch (err) {
       console.error("Eviction failure:", err);
       showToast("Could not evict participant from meeting.", "error");
@@ -311,7 +373,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     try {
       cleanupMediaTracks();
       await endMeeting(meeting.public_meeting_id);
-      router.push("/?meetingEnded=true");
+      exitRoom("ended");
     } catch (err) {
       console.error("Failed to finalize end meeting endpoint:", err);
       router.push("/");
@@ -322,6 +384,8 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   const handleLeaveSession = async () => {
     if (isLeaving) return;
     setIsLeaving(true);
+    shouldReconnectRef.current = false;
+    socketRef.current?.close();
 
     try {
       cleanupMediaTracks();
@@ -344,8 +408,8 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
 
       {/* 2. Custom meeting top navbar */}
       <MeetingHeader 
-        meeting={meeting} 
-        participantCount={participants.length} 
+        meeting={{ ...meeting, status: meetingStatus }}
+        participantCount={roomParticipants.length}
       />
 
       {/* 3. Central Working Area (Video grid + Sidebar drawers) */}
@@ -358,15 +422,15 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         >
           <div 
             className={`w-full max-w-6xl mx-auto grid gap-6 p-2 ${
-              participants.length === 1 
+              roomParticipants.length === 1
                 ? "grid-cols-1 max-w-2xl" 
-                : participants.length === 2 
+                : roomParticipants.length === 2
                 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" 
                 : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
             }`}
             id="meeting-video-grid"
           >
-            {participants.map((p) => (
+            {roomParticipants.map((p) => (
               <VideoTile
                 key={p.id}
                 participant={p}
@@ -384,7 +448,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
             id="sidebar-panel-container"
           >
             <ParticipantsPanel
-              participants={participants}
+              participants={roomParticipants}
               currentParticipant={currentParticipant}
               onMuteAll={handleMuteAllGuests}
               onRemoveParticipant={handleEvictParticipant}
@@ -406,14 +470,14 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         onLeave={handleLeaveSession}
         onEndMeeting={handleEndSession}
         isHost={isHost}
-        participantCount={participants.length}
+        participantCount={roomParticipants.length}
       />
 
       {/* 5. Overlay invite details dialog */}
       <InviteModal
         isOpen={isInviteOpen}
         onClose={() => setIsInviteOpen(false)}
-        meeting={meeting}
+        meeting={{ ...meeting, status: meetingStatus }}
       />
 
       {/* 6. Active micro Toast notification */}

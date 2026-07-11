@@ -5,6 +5,13 @@
 
 const API_URL = (typeof process !== "undefined" && process.env && process.env.NEXT_PUBLIC_API_URL) || "/api";
 
+export function getMeetingWebSocketUrl(meetingId) {
+  if (typeof window === "undefined") return null;
+  const backend = new URL(API_URL, window.location.origin);
+  const protocol = backend.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${backend.host}/ws/meetings/${encodeURIComponent(meetingId)}`;
+}
+
 /**
  * Reusable request helper that wraps standard fetch, parses JSON safely,
  * and extracts detail error messages from FastAPI.
