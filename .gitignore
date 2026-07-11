@@ -5,3 +5,8 @@ cache/
 node_modules/
 .next/
 .db
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.local.example
