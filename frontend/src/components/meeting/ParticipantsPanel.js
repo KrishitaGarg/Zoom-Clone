@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Mic, MicOff, Video, VideoOff, Crown, UserX, VolumeX, AlertCircle } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, Crown, UserX, VolumeX, AlertCircle } from "lucide-react";
 
 /**
  * Zoom-inspired panel listing all active participants and displaying administrative host triggers.
@@ -18,7 +18,8 @@ export default function ParticipantsPanel({
   currentParticipant, 
   onMuteAll, 
   onRemoveParticipant,
-  isMuteAllLoading = false
+  isMuteAllLoading = false,
+  embedded = false,
 }) {
   const [removeIdLoading, setRemoveIdLoading] = useState(null);
 
@@ -39,18 +40,17 @@ export default function ParticipantsPanel({
 
   return (
     <div 
-      className="w-full md:w-80 bg-[#1A1A1A] border-l border-white/5 flex flex-col h-full text-white z-10 select-none"
+      className={`w-full bg-[#1A1A1A] flex flex-col h-full text-white z-10 select-none ${embedded ? "" : "md:w-80 border-l border-white/5"}`}
       id="participants-panel-root"
     >
-      {/* Roster Header */}
-      <div className="p-4 border-b border-white/5 flex items-center justify-between" id="panel-header">
+      {!embedded && <div className="p-4 border-b border-white/5 flex items-center justify-between" id="panel-header">
         <h2 className="text-sm font-bold text-gray-100 flex items-center gap-2">
           <span>Participants</span>
           <span className="bg-[#2D8CFF] text-white text-xs px-2 py-0.5 rounded-full font-bold">
             {participants.length}
           </span>
         </h2>
-      </div>
+      </div>}
 
       {/* Roster list */}
       <div className="flex-1 overflow-y-auto divide-y divide-white/5 p-2 space-y-1" id="participants-list-container">
@@ -143,13 +143,6 @@ export default function ParticipantsPanel({
             <VolumeX className="w-3.5 h-3.5" />
             <span>{isMuteAllLoading ? "Muting Everyone..." : "Mute All Participants"}</span>
           </button>
-          
-          <div className="flex items-start gap-1.5 text-[10px] text-gray-500 bg-white/3 p-2.5 rounded-lg border border-white/5" id="host-limit-card">
-            <AlertCircle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
-            <p className="leading-relaxed">
-              <strong>MVP Signal Limitation:</strong> Mute All updates server state display. Without real-time WebRTC tracks transmission, it cannot physically mute guest microphones remotely.
-            </p>
-          </div>
         </div>
       )}
     </div>

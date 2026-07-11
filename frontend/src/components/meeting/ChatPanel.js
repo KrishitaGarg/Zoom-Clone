@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { Send, X } from "lucide-react";
+import { Send } from "lucide-react";
 
 /** In-memory, meeting-scoped chat panel backed by the existing room WebSocket. */
-export default function ChatPanel({ messages = [], currentParticipantId, onSend, onClose }) {
+export default function ChatPanel({ messages = [], currentParticipantId, onSend, embedded = false }) {
   const [draft, setDraft] = useState("");
   const latestMessageRef = useRef(null);
 
@@ -21,13 +21,8 @@ export default function ChatPanel({ messages = [], currentParticipantId, onSend,
   };
 
   return (
-    <aside className="w-full md:w-80 bg-[#1a1a1a] border-l border-white/10 flex flex-col h-full text-white z-10" id="chat-panel-root">
-      <header className="h-12 px-4 border-b border-white/10 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Meeting Chat</h2>
-        <button onClick={onClose} className="p-1 text-gray-400 hover:text-white" aria-label="Close chat" title="Close chat">
-          <X className="w-4 h-4" />
-        </button>
-      </header>
+    <aside className={`w-full bg-[#1a1a1a] flex flex-col h-full text-white ${embedded ? "" : "md:w-80 border-l border-white/10"}`} id="chat-panel-root">
+      {!embedded && <header className="h-12 px-4 border-b border-white/10 flex items-center"><h2 className="text-sm font-semibold">Meeting Chat</h2></header>}
 
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3" id="chat-message-list">
         {messages.length === 0 ? (

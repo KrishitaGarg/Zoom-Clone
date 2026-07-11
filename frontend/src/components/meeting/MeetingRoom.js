@@ -8,8 +8,7 @@ import MeetingHeader from "./MeetingHeader";
 import PermissionNotice from "./PermissionNotice";
 import VideoTile from "./VideoTile";
 import MeetingToolbar from "./MeetingToolbar";
-import ParticipantsPanel from "./ParticipantsPanel";
-import ChatPanel from "./ChatPanel";
+import MeetingSidebar from "./MeetingSidebar";
 import InviteModal from "./InviteModal";
 import Toast from "../ui/Toast";
 
@@ -31,11 +30,12 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   const [meetingStatus, setMeetingStatus] = useState(meeting.status);
   
   // Drawer & Modal layout flags
-  const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState(null);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const isParticipantsOpen = sidebarTab === "participants";
+  const isChatOpen = sidebarTab === "chat";
 
   // The sole local media state. The toolbar, local tile, and MediaStream all use it.
   const [localMediaState, setLocalMediaState] = useState({
@@ -624,18 +624,22 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         </div>
 
         {/* Sliding Sidebar: Participants Panel */}
-        {(isParticipantsOpen || isChatOpen) && (
-          <div className="w-full md:w-auto h-auto md:h-full flex flex-col md:flex-row border-t md:border-t-0 md:border-l border-white/5" id="sidebar-panel-container">
-            {isParticipantsOpen && (
-            <ParticipantsPanel
+        {sidebarTab && (
+          <div className="absolute inset-0 z-30 bg-[#1a1a1a] md:static md:inset-auto md:z-10 md:w-80 md:shrink-0 border-l border-white/10" id="sidebar-panel-container">
+            <MeetingSidebar
+              activeTab={sidebarTab}
+              onSelectTab={setSidebarTab}
+              onClose={() => setSidebarTab(null)}
               participants={roomParticipants}
               currentParticipant={currentParticipant}
               onMuteAll={handleMuteAllGuests}
               onRemoveParticipant={handleEvictParticipant}
               isMuteAllLoading={isMuteAllLoading}
+              messages={chatMessages}
+              currentParticipantId={participantId}
+              onSendChat={sendChatMessage}
+              unreadChatCount={unreadChatCount}
             />
-            )}
-            {isChatOpen && <ChatPanel messages={chatMessages} currentParticipantId={participantId} onSend={sendChatMessage} onClose={() => setIsChatOpen(false)} />}
           </div>
         )}
       </div>
@@ -647,9 +651,9 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         onToggleMic={handleToggleMic}
         onToggleCamera={handleToggleCamera}
         isParticipantsOpen={isParticipantsOpen}
-        onToggleParticipants={() => setIsParticipantsOpen(!isParticipantsOpen)}
+        onToggleParticipants={() => setSidebarTab("participants")}
         isChatOpen={isChatOpen}
-        onToggleChat={() => setIsChatOpen((open) => !open)}
+        onToggleChat={() => setSidebarTab("chat")}
         unreadChatCount={unreadChatCount}
         onOpenInvite={() => setIsInviteOpen(true)}
         onLeave={handleLeaveSession}
