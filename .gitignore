@@ -4,7 +4,7 @@ venv/
 cache/
 node_modules/
 .next/
-.db
+*.db
 .env
 .env.local
 .env.*.local

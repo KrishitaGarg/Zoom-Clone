@@ -398,7 +398,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#121212] text-white" id="meeting-room-viewport">
+    <div className="h-screen overflow-hidden flex flex-col bg-[#121212] text-white" id="meeting-room-viewport">
       
       {/* 1. Roster notifications & Warning Notice Banners */}
       <PermissionNotice 
@@ -413,20 +413,20 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
       />
 
       {/* 3. Central Working Area (Video grid + Sidebar drawers) */}
-      <div className="flex-1 flex flex-col md:flex-row relative overflow-hidden" id="meeting-workspace-area">
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row relative overflow-hidden" id="meeting-workspace-area">
         
         {/* Dynamic Video Layout Grid */}
         <div 
-          className="flex-1 p-6 md:p-8 overflow-y-auto flex items-center justify-center bg-[#141414]"
+            className="flex-1 min-h-0 p-2 md:p-3 overflow-hidden flex items-center justify-center bg-[#141414]"
           id="video-grid-container"
         >
           <div 
-            className={`w-full max-w-6xl mx-auto grid gap-6 p-2 ${
+            className={`w-full h-full max-w-[1600px] mx-auto grid content-center gap-2 md:gap-3 ${
               roomParticipants.length === 1
-                ? "grid-cols-1 max-w-2xl" 
-                : roomParticipants.length === 2
-                ? "grid-cols-1 md:grid-cols-2 max-w-4xl" 
-                : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+                ? "grid-cols-1 max-w-5xl"
+              : roomParticipants.length === 2
+                ? "grid-cols-1 md:grid-cols-2 max-w-7xl"
+                : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
             }`}
             id="meeting-video-grid"
           >
