@@ -50,6 +50,14 @@ class ConnectionManager:
             self.disconnect(meeting_id, target, target_id)
             return False
 
+    async def broadcast_chat_message(self, meeting_id: str, message: dict) -> None:
+        """Send an in-memory chat event only to sockets in this meeting."""
+        for websocket in list(self._connections.get(meeting_id, [])):
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                self.disconnect(meeting_id, websocket)
+
     def _room_state(self, meeting_id: str) -> dict | None:
         """Read a fresh committed snapshot; never construct state from mutations."""
         db: Session = SessionLocal()

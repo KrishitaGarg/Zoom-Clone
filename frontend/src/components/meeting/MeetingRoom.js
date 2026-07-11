@@ -9,6 +9,7 @@ import PermissionNotice from "./PermissionNotice";
 import VideoTile from "./VideoTile";
 import MeetingToolbar from "./MeetingToolbar";
 import ParticipantsPanel from "./ParticipantsPanel";
+import ChatPanel from "./ChatPanel";
 import InviteModal from "./InviteModal";
 import Toast from "../ui/Toast";
 
@@ -32,6 +33,9 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   // Drawer & Modal layout flags
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
 
   // The sole local media state. The toolbar, local tile, and MediaStream all use it.
   const [localMediaState, setLocalMediaState] = useState({
@@ -64,6 +68,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   const pendingOffersRef = useRef(new Map());
   const offerRetryRef = useRef(new Map());
   const participantsRef = useRef(initialParticipants || []);
+  const isChatOpenRef = useRef(false);
 
   // Helper to show custom micro toast notifications
   const showToast = useCallback((message, type = "success") => {
@@ -73,6 +78,11 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   const hideToast = useCallback(() => {
     setToast((prev) => ({ ...prev, show: false }));
   }, []);
+
+  useEffect(() => {
+    isChatOpenRef.current = isChatOpen;
+    if (isChatOpen) setUnreadChatCount(0);
+  }, [isChatOpen]);
 
   const isMuted = localMediaState.isMuted;
   const isVideoOff = localMediaState.isVideoOff;
@@ -117,6 +127,14 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type, target_participant_id: targetParticipantId, ...payload }));
+    }
+  }, []);
+
+  const sendChatMessage = useCallback((message) => {
+    const socket = socketRef.current;
+    const text = message.trim();
+    if (text && socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "chat_message", message: text }));
     }
   }, []);
 
@@ -323,6 +341,13 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         if (socketRef.current !== socket) return;
         try {
           const payload = JSON.parse(event.data);
+          if (payload.type === "chat_message") {
+            setChatMessages((current) => [...current, payload]);
+            if (!isChatOpenRef.current && payload.sender_id !== Number(participantId)) {
+              setUnreadChatCount((count) => count + 1);
+            }
+            return;
+          }
           if (["webrtc_offer", "webrtc_answer", "ice_candidate"].includes(payload.type)) {
             handleWebRtcSignal(payload);
             return;
@@ -599,11 +624,9 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         </div>
 
         {/* Sliding Sidebar: Participants Panel */}
-        {isParticipantsOpen && (
-          <div 
-            className="w-full md:w-auto h-auto md:h-full border-t md:border-t-0 md:border-l border-white/5" 
-            id="sidebar-panel-container"
-          >
+        {(isParticipantsOpen || isChatOpen) && (
+          <div className="w-full md:w-auto h-auto md:h-full flex flex-col md:flex-row border-t md:border-t-0 md:border-l border-white/5" id="sidebar-panel-container">
+            {isParticipantsOpen && (
             <ParticipantsPanel
               participants={roomParticipants}
               currentParticipant={currentParticipant}
@@ -611,6 +634,8 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
               onRemoveParticipant={handleEvictParticipant}
               isMuteAllLoading={isMuteAllLoading}
             />
+            )}
+            {isChatOpen && <ChatPanel messages={chatMessages} currentParticipantId={participantId} onSend={sendChatMessage} onClose={() => setIsChatOpen(false)} />}
           </div>
         )}
       </div>
@@ -623,6 +648,9 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         onToggleCamera={handleToggleCamera}
         isParticipantsOpen={isParticipantsOpen}
         onToggleParticipants={() => setIsParticipantsOpen(!isParticipantsOpen)}
+        isChatOpen={isChatOpen}
+        onToggleChat={() => setIsChatOpen((open) => !open)}
+        unreadChatCount={unreadChatCount}
         onOpenInvite={() => setIsInviteOpen(true)}
         onLeave={handleLeaveSession}
         onEndMeeting={handleEndSession}

@@ -8,6 +8,7 @@ The FastAPI backend owns meeting and participant mutations, persists data with S
 - SQLite persistence with `Meeting`, `MeetingParticipant`, and `ParticipantSession` models.
 - Idempotent startup seed data, including the default application user.
 - `WS /ws/meetings/{meeting_id}?participant_id={id}` for room-state snapshots and WebRTC signaling.
+- Room-scoped, in-memory chat events with validated sender names and UTC timestamps.
 - Targeted forwarding of `webrtc_offer`, `webrtc_answer`, and `ice_candidate`; signaling messages are not broadcast to every room socket.
 
 ## Structure

@@ -10,6 +10,7 @@ A full-stack Zoom-inspired meeting application built for an SDE assignment. It p
 - FastAPI REST APIs backed by SQLite and SQLAlchemy.
 - Native WebSockets for authoritative room-state updates: joins, leaves, media state, removals, and meeting end events.
 - Targeted WebSocket signaling for WebRTC offers, answers, and ICE candidates.
+- In-meeting WebSocket chat with sender names, timestamps, unread indicators, and room-scoped delivery.
 - Bidirectional peer-to-peer WebRTC audio and video using Google's public STUN server.
 - Local microphone and camera controls that update the MediaStream tracks, REST state, and connected participants.
 - Host controls for Mute All and participant removal.
@@ -32,12 +33,12 @@ No deployed application URLs are committed to this repository. Configure the pub
 ```text
 Next.js client
   ├─ REST ────────────────► FastAPI ─────────► SQLite
-  └─ WebSocket ───────────► room state + targeted WebRTC signaling
+  └─ WebSocket ───────────► room state + chat + targeted WebRTC signaling
                                       │
 Browser RTCPeerConnection ◄─ STUN ──► Browser RTCPeerConnection
 ```
 
-REST endpoints remain the mutation layer. After a committed mutation, FastAPI broadcasts a fresh room snapshot. The same meeting WebSocket forwards WebRTC `webrtc_offer`, `webrtc_answer`, and `ice_candidate` messages only to their intended participant.
+REST endpoints remain the mutation layer. After a committed mutation, FastAPI broadcasts a fresh room snapshot. The same meeting WebSocket broadcasts room-scoped chat events and forwards WebRTC `webrtc_offer`, `webrtc_answer`, and `ice_candidate` messages only to their intended participant.
 
 ## Project structure
 
@@ -127,4 +128,4 @@ The frontend is deployed on Vercel and the FastAPI backend is deployed on Render
 - This MVP uses an in-memory connection manager, so a multi-worker deployment needs Redis Pub/Sub or another shared event broker.
 - WebRTC currently uses public STUN and is most reliable for two participants. Production NAT traversal requires TURN infrastructure.
 - Authentication and server-side authorization are intentionally not implemented.
-- Future work includes authenticated accounts, persistent chat, TURN infrastructure, Redis Pub/Sub, and broader production scaling/observability.
+- Future work includes authenticated accounts, persistent chat history, TURN infrastructure, Redis Pub/Sub, and broader production scaling/observability.

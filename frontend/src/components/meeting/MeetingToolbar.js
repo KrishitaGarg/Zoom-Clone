@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Mic, MicOff, Video, VideoOff, Users, Share2, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, Users, Share2, MessageSquare, LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
 
 const Control = ({ children, label, active = false, danger = false, ...props }) => (
   <button
@@ -19,7 +19,7 @@ const Control = ({ children, label, active = false, danger = false, ...props }) 
 /** Compact fixed Zoom-like meeting controls; callbacks and room behavior remain unchanged. */
 export default function MeetingToolbar({
   isMuted, isCameraOn, onToggleMic, onToggleCamera, isParticipantsOpen,
-  onToggleParticipants, onOpenInvite, onLeave, onEndMeeting, isHost, participantCount,
+  onToggleParticipants, onToggleChat, onOpenInvite, onLeave, onEndMeeting, isHost, participantCount, isChatOpen, unreadChatCount,
 }) {
   return (
     <footer className="shrink-0 h-[68px] bg-[#1b1b1d] border-t border-white/10 px-3 sm:px-5 flex items-center justify-between text-white z-20 select-none" id="meeting-toolbar-root">
@@ -39,6 +39,12 @@ export default function MeetingToolbar({
         <Control onClick={onToggleParticipants} label={`Participants${participantCount ? ` (${participantCount})` : ""}`} active={isParticipantsOpen} aria-label="Toggle participants list panel">
           <Users className="w-5 h-5" />
         </Control>
+        <div className="relative">
+          <Control onClick={onToggleChat} label="Chat" active={isChatOpen} aria-label="Toggle meeting chat">
+            <MessageSquare className="w-5 h-5" />
+          </Control>
+          {unreadChatCount > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-[#e02828] text-[9px] leading-4 text-center font-bold text-white">{unreadChatCount > 99 ? "99+" : unreadChatCount}</span>}
+        </div>
         <Control onClick={onOpenInvite} label="Invite" aria-label="Invite participants">
           <Share2 className="w-5 h-5" />
         </Control>

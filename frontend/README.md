@@ -9,6 +9,7 @@ The Next.js 15 frontend provides the dashboard, meeting join flow, responsive ro
 - Opens one meeting WebSocket using `NEXT_PUBLIC_API_URL`; HTTPS APIs are converted to WSS automatically.
 - Replaces the roster from authoritative `room_state` messages and uses a five-second REST fallback only when the socket is unavailable.
 - Uses targeted WebRTC offer, answer, and ICE signaling over that same socket.
+- Provides in-meeting chat with Enter-to-send, timestamps, auto-scroll, and unread badges.
 - Captures local microphone/camera tracks and renders received remote `MediaStream` objects in the corresponding participant tiles.
 - Keeps microphone/video controls synchronized with MediaStream tracks and participant state.
 
