@@ -5,11 +5,12 @@
 
 const API_URL = (typeof process !== "undefined" && process.env && process.env.NEXT_PUBLIC_API_URL) || "/api";
 
-export function getMeetingWebSocketUrl(meetingId) {
+export function getMeetingWebSocketUrl(meetingId, participantId = null) {
   if (typeof window === "undefined") return null;
   const backend = new URL(API_URL, window.location.origin);
   const protocol = backend.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${backend.host}/ws/meetings/${encodeURIComponent(meetingId)}`;
+  const participantQuery = participantId ? `?participant_id=${encodeURIComponent(participantId)}` : "";
+  return `${protocol}//${backend.host}/ws/meetings/${encodeURIComponent(meetingId)}${participantQuery}`;
 }
 
 /**

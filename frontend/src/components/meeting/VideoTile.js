@@ -4,7 +4,7 @@ import React from "react";
 import { Crown, MicOff } from "lucide-react";
 
 /** Compact Zoom-like video canvas for a room participant. */
-export default function VideoTile({ participant, isLocal, videoRef }) {
+export default function VideoTile({ participant, isLocal, videoRef, remoteStream }) {
   if (!participant) return null;
 
   const { display_name, role, is_muted, is_camera_on } = participant;
@@ -31,6 +31,8 @@ export default function VideoTile({ participant, isLocal, videoRef }) {
             className="w-full h-full object-cover transform scale-x-[-1]"
             id="local-video-player"
           />
+        ) : remoteStream ? (
+          <RemoteVideo stream={remoteStream} participantId={participant.id} />
         ) : (
           <div className="w-full h-full bg-gradient-to-tr from-[#1c1d20] via-[#292b30] to-[#1c1d20] flex items-center justify-center" id={`mock-video-stream-${participant.id}`}>
             <div className="text-center space-y-2">
@@ -64,4 +66,12 @@ export default function VideoTile({ participant, isLocal, videoRef }) {
       </div>
     </div>
   );
+}
+
+function RemoteVideo({ stream, participantId }) {
+  const videoRef = React.useRef(null);
+  React.useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = stream;
+  }, [stream]);
+  return <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" id={`remote-video-player-${participantId}`} />;
 }

@@ -38,6 +38,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     isMuted: false,
     isVideoOff: false,
   });
+  const [remoteStreams, setRemoteStreams] = useState({});
 
   // Browser Permission notice state
   const [permissionError, setPermissionError] = useState("");
@@ -58,6 +59,11 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   const shouldReconnectRef = useRef(true);
   const hasConnectedRef = useRef(false);
   const redirectingRef = useRef(false);
+  const peersRef = useRef(new Map());
+  const pendingIceRef = useRef(new Map());
+  const pendingOffersRef = useRef(new Map());
+  const offerRetryRef = useRef(new Map());
+  const participantsRef = useRef(initialParticipants || []);
 
   // Helper to show custom micro toast notifications
   const showToast = useCallback((message, type = "success") => {
@@ -80,6 +86,142 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     if (videoTrack) videoTrack.enabled = !nextState.isVideoOff;
     setLocalMediaState(nextState);
   }, []);
+
+  const closePeer = useCallback((remoteParticipantId) => {
+    if (offerRetryRef.current.has(remoteParticipantId)) {
+      clearTimeout(offerRetryRef.current.get(remoteParticipantId));
+      offerRetryRef.current.delete(remoteParticipantId);
+    }
+    const peer = peersRef.current.get(remoteParticipantId);
+    if (peer) {
+      peer.onicecandidate = null;
+      peer.ontrack = null;
+      peer.onconnectionstatechange = null;
+      peer.close();
+      peersRef.current.delete(remoteParticipantId);
+    }
+    pendingIceRef.current.delete(remoteParticipantId);
+    setRemoteStreams((current) => {
+      const next = { ...current };
+      delete next[remoteParticipantId];
+      return next;
+    });
+  }, []);
+
+  const cleanupPeers = useCallback(() => {
+    [...peersRef.current.keys()].forEach(closePeer);
+    pendingOffersRef.current.clear();
+  }, [closePeer]);
+
+  const sendWebRtcSignal = useCallback((targetParticipantId, type, payload) => {
+    const socket = socketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type, target_participant_id: targetParticipantId, ...payload }));
+    }
+  }, []);
+
+  const attachLocalTracks = useCallback((peer) => {
+    const stream = mediaStreamRef.current;
+    if (!stream) return;
+
+    stream.getTracks().forEach((track) => {
+      const sender = peer.getSenders().find((item) => item.track?.kind === track.kind);
+      if (sender) {
+        // Covers a peer created before getUserMedia completed without adding a
+        // second sender for the same kind.
+        if (sender.track !== track) sender.replaceTrack(track);
+      } else {
+        peer.addTrack(track, stream);
+      }
+    });
+  }, []);
+
+  const ensurePeer = useCallback((remoteParticipantId) => {
+    let peer = peersRef.current.get(remoteParticipantId);
+    if (peer) {
+      attachLocalTracks(peer);
+      return peer;
+    }
+
+    peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    attachLocalTracks(peer);
+    peer.onicecandidate = ({ candidate }) => {
+      if (candidate) sendWebRtcSignal(remoteParticipantId, "ice_candidate", { candidate });
+    };
+    peer.ontrack = ({ streams }) => {
+      const stream = streams[0];
+      if (stream) setRemoteStreams((current) => ({ ...current, [remoteParticipantId]: stream }));
+    };
+    peer.onconnectionstatechange = () => {
+      if (["failed", "closed"].includes(peer.connectionState)) closePeer(remoteParticipantId);
+    };
+    peersRef.current.set(remoteParticipantId, peer);
+    return peer;
+  }, [attachLocalTracks, closePeer, sendWebRtcSignal]);
+
+  const applyPendingIce = useCallback(async (remoteParticipantId, peer) => {
+    const candidates = pendingIceRef.current.get(remoteParticipantId) || [];
+    pendingIceRef.current.delete(remoteParticipantId);
+    for (const candidate of candidates) await peer.addIceCandidate(candidate);
+  }, []);
+
+  const handleWebRtcSignal = useCallback(async (message) => {
+    const remoteParticipantId = Number(message.from_participant_id);
+    if (!remoteParticipantId || remoteParticipantId === Number(participantId)) return;
+    // The joining answerer must not create a trackless answer. Keep the offer
+    // until getUserMedia has supplied the audio/video tracks for this peer.
+    if (message.type === "webrtc_offer" && !mediaStreamRef.current) {
+      pendingOffersRef.current.set(remoteParticipantId, message);
+      return;
+    }
+    const peer = ensurePeer(remoteParticipantId);
+    try {
+      if (message.type === "webrtc_offer") {
+        await peer.setRemoteDescription(new RTCSessionDescription(message.sdp));
+        await applyPendingIce(remoteParticipantId, peer);
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        sendWebRtcSignal(remoteParticipantId, "webrtc_answer", { sdp: peer.localDescription });
+      } else if (message.type === "webrtc_answer") {
+        await peer.setRemoteDescription(new RTCSessionDescription(message.sdp));
+        if (offerRetryRef.current.has(remoteParticipantId)) {
+          clearTimeout(offerRetryRef.current.get(remoteParticipantId));
+          offerRetryRef.current.delete(remoteParticipantId);
+        }
+        await applyPendingIce(remoteParticipantId, peer);
+      } else if (message.type === "ice_candidate") {
+        const candidate = new RTCIceCandidate(message.candidate);
+        if (peer.remoteDescription) await peer.addIceCandidate(candidate);
+        else pendingIceRef.current.set(remoteParticipantId, [...(pendingIceRef.current.get(remoteParticipantId) || []), candidate]);
+      }
+    } catch (error) {
+      closePeer(remoteParticipantId);
+    }
+  }, [applyPendingIce, closePeer, ensurePeer, participantId, sendWebRtcSignal]);
+
+  const syncPeers = useCallback(async (nextParticipants = participantsRef.current) => {
+    if (!mediaStreamRef.current || !participantId) return;
+    const localId = Number(participantId);
+    const remoteParticipants = nextParticipants.filter((participant) => participant.id !== localId);
+    const activeIds = new Set(remoteParticipants.map((participant) => participant.id));
+    [...peersRef.current.keys()].filter((id) => !activeIds.has(id)).forEach(closePeer);
+
+    for (const remote of remoteParticipants) {
+      // The lower immutable participant ID is the sole offerer, preventing glare.
+      if (localId < remote.id && !peersRef.current.has(remote.id)) {
+        const peer = ensurePeer(remote.id);
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        sendWebRtcSignal(remote.id, "webrtc_offer", { sdp: peer.localDescription });
+        // A join can race the target socket registration; retry the same offer once.
+        offerRetryRef.current.set(remote.id, setTimeout(() => {
+          if (peer.signalingState === "have-local-offer") {
+            sendWebRtcSignal(remote.id, "webrtc_offer", { sdp: peer.localDescription });
+          }
+        }, 1500));
+      }
+    }
+  }, [closePeer, ensurePeer, participantId, sendWebRtcSignal]);
 
   // The local entry is always projected from localMediaState, rather than waiting
   // for the round trip room-state broadcast before the tile updates.
@@ -107,6 +249,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
 
   // Clean helper to stop all current media device tracks
   const cleanupMediaTracks = () => {
+    cleanupPeers();
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
@@ -130,7 +273,9 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
   const fetchParticipants = useCallback(async () => {
     try {
       const updatedList = await getMeetingParticipants(meeting.public_meeting_id);
+      participantsRef.current = updatedList;
       setParticipants(updatedList);
+      syncPeers(updatedList);
       const localParticipant = updatedList.find((p) => p.id === Number(participantId));
       if (localParticipant) {
         applyLocalMediaState({
@@ -145,7 +290,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     } catch (err) {
       console.error("Error fetching participants roster:", err);
     }
-  }, [meeting.public_meeting_id, participantId, exitRoom, applyLocalMediaState]);
+  }, [meeting.public_meeting_id, participantId, exitRoom, applyLocalMediaState, syncPeers]);
 
   // One socket per room. A failed connection uses a five-second REST fallback.
   useEffect(() => {
@@ -162,7 +307,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
     };
     const connect = () => {
       if (disposed || !shouldReconnectRef.current) return;
-      const url = getMeetingWebSocketUrl(meeting.public_meeting_id);
+      const url = getMeetingWebSocketUrl(meeting.public_meeting_id, participantId);
       if (!url) return startFallback();
       let socket;
       try { socket = new WebSocket(url); } catch (error) { startFallback(); return; }
@@ -178,8 +323,14 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
         if (socketRef.current !== socket) return;
         try {
           const payload = JSON.parse(event.data);
+          if (["webrtc_offer", "webrtc_answer", "ice_candidate"].includes(payload.type)) {
+            handleWebRtcSignal(payload);
+            return;
+          }
           if (payload.type !== "room_state") return;
+          participantsRef.current = Array.isArray(payload.participants) ? payload.participants : [];
           setParticipants(Array.isArray(payload.participants) ? payload.participants : []);
+          syncPeers(participantsRef.current);
           const localParticipant = payload.participants?.find((p) => p.id === Number(participantId));
           if (localParticipant) {
             applyLocalMediaState({
@@ -213,7 +364,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
       socketRef.current?.close();
       socketRef.current = null;
     };
-  }, [meeting.public_meeting_id, participantId, fetchParticipants, exitRoom, meeting.status, applyLocalMediaState]);
+  }, [meeting.public_meeting_id, participantId, fetchParticipants, exitRoom, meeting.status, applyLocalMediaState, handleWebRtcSignal, syncPeers, cleanupPeers]);
 
   // Hardware Initialization: Run on component mount to capture user media
   useEffect(() => {
@@ -237,6 +388,11 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
 
         activeStream = stream;
         mediaStreamRef.current = stream;
+        // Respond to an offer only after its audio/video tracks are attached.
+        const queuedOffers = [...pendingOffersRef.current.values()];
+        pendingOffersRef.current.clear();
+        for (const offer of queuedOffers) await handleWebRtcSignal(offer);
+        await syncPeers();
 
         // Extract native track configuration
         const audioTrack = stream.getAudioTracks()[0];
@@ -282,7 +438,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
       }
       cleanupMediaTracks();
     };
-  }, [applyLocalMediaState]);
+  }, [applyLocalMediaState, syncPeers, cleanupPeers, handleWebRtcSignal]);
 
   // Re-bind MediaStream source if video element mounts due to camera state changes
   useEffect(() => {
@@ -436,6 +592,7 @@ export default function MeetingRoom({ meeting, initialParticipants, participantI
                 participant={p}
                 isLocal={p.id === Number(participantId)}
                 videoRef={p.id === Number(participantId) ? localVideoRef : null}
+                remoteStream={remoteStreams[p.id]}
               />
             ))}
           </div>
